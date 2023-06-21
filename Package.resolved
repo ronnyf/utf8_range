@@ -1,0 +1,23 @@
+{
+  "pins" : [
+    {
+      "identity" : "abseil-cpp",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ronnyf/abseil-cpp",
+      "state" : {
+        "revision" : "6c4751e13e95ae76b9e1c362f470f2823c91e972",
+        "version" : "1.0.5"
+      }
+    },
+    {
+      "identity" : "googletest",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ronnyf/googletest.git",
+      "state" : {
+        "revision" : "79742fd30b23fbd60784ceeb1a4eedfd38d7a0a8",
+        "version" : "1.14.0"
+      }
+    }
+  ],
+  "version" : 2
+}

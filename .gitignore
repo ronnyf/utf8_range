@@ -1,2 +1,8 @@
 # Ignore the bazel symlinks
 /bazel-*
+xcuserdata/
+.DS_Store
+.build
+
+
+

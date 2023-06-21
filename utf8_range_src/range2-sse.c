@@ -2,7 +2,8 @@
  * Process 2x16 bytes in each iteration.
  * Comments removed for brevity. See range-sse.c for details.
  */
-#ifdef __SSE4_1__
+
+#if defined(__SSE4_1__)
 
 #include <stdio.h>
 #include <stdint.h>
@@ -167,4 +168,4 @@ int utf8_range2(const unsigned char *data, int len)
     return utf8_naive(data, len);
 }
 
-#endif
+#endif // defined(__SSE4_1__)
