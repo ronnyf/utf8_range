@@ -1,4 +1,4 @@
-#ifdef __aarch64__
+#if defined (_M_ARM) || defined(_M_ARM64) || defined(__aarch64__)
 
 #include <stdio.h>
 #include <stdint.h>

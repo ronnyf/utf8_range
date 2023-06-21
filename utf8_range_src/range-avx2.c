@@ -1,4 +1,4 @@
-#ifdef __x86_64__
+#if defined(__AVX2__)
 
 #include <stdio.h>
 #include <stdint.h>
@@ -7,12 +7,12 @@
 int utf8_naive(const unsigned char *data, int len);
 
 #if 0
-static void print128(const char *s, const __m128i v128)
+static void print256(const char *s, const __m256i v256)
 {
-  const unsigned char *v8 = (const unsigned char *)&v128;
+  const unsigned char *v8 = (const unsigned char *)&v256;
   if (s)
     printf("%s:\t", s);
-  for (int i = 0; i < 16; i++)
+  for (int i = 0; i < 32; i++)
     printf("%02x ", v8[i]);
   printf("\n");
 }
@@ -27,10 +27,12 @@ static void print128(const char *s, const __m128i v128)
  */
 static const int8_t _first_len_tbl[] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 3,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 3,
 };
 
 /* Map "First Byte" to 8-th item of range table (0xC2 ~ 0xF4) */
 static const int8_t _first_range_tbl[] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 8, 8, 8,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 8, 8, 8,
 };
 
@@ -48,8 +50,12 @@ static const int8_t _first_range_tbl[] = {
 static const int8_t _range_min_tbl[] = {
     0x00, 0x80, 0x80, 0x80, 0xA0, 0x80, 0x90, 0x80,
     0xC2, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F,
+    0x00, 0x80, 0x80, 0x80, 0xA0, 0x80, 0x90, 0x80,
+    0xC2, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F,
 };
 static const int8_t _range_max_tbl[] = {
+    0x7F, 0xBF, 0xBF, 0xBF, 0xBF, 0x9F, 0xBF, 0x8F,
+    0xF4, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
     0x7F, 0xBF, 0xBF, 0xBF, 0xBF, 0x9F, 0xBF, 0x8F,
     0xF4, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
 };
@@ -72,82 +78,101 @@ static const int8_t _range_max_tbl[] = {
 /* index1 -> E0, index14 -> ED */
 static const int8_t _df_ee_tbl[] = {
     0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0,
+    0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0,
 };
 /* index1 -> F0, index5 -> F4 */
 static const int8_t _ef_fe_tbl[] = {
+    0, 3, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 3, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 };
 
 #define RET_ERR_IDX 0   /* Define 1 to return index of first error char */
 
+static inline __m256i push_last_byte_of_a_to_b(__m256i a, __m256i b) {
+  return _mm256_alignr_epi8(b, _mm256_permute2x128_si256(a, b, 0x21), 15);
+}
+
+static inline __m256i push_last_2bytes_of_a_to_b(__m256i a, __m256i b) {
+  return _mm256_alignr_epi8(b, _mm256_permute2x128_si256(a, b, 0x21), 14);
+}
+
+static inline __m256i push_last_3bytes_of_a_to_b(__m256i a, __m256i b) {
+  return _mm256_alignr_epi8(b, _mm256_permute2x128_si256(a, b, 0x21), 13);
+}
+
 /* 5x faster than naive method */
 /* Return 0 - success, -1 - error, >0 - first error char(if RET_ERR_IDX = 1) */
-int utf8_range(const unsigned char *data, int len)
+int utf8_range_avx2(const unsigned char *data, int len)
 {
 #if  RET_ERR_IDX
     int err_pos = 1;
 #endif
 
-    if (len >= 16) {
-        __m128i prev_input = _mm_set1_epi8(0);
-        __m128i prev_first_len = _mm_set1_epi8(0);
+    if (len >= 32) {
+        __m256i prev_input = _mm256_set1_epi8(0);
+        __m256i prev_first_len = _mm256_set1_epi8(0);
 
         /* Cached tables */
-        const __m128i first_len_tbl =
-            _mm_loadu_si128((const __m128i *)_first_len_tbl);
-        const __m128i first_range_tbl =
-            _mm_loadu_si128((const __m128i *)_first_range_tbl);
-        const __m128i range_min_tbl =
-            _mm_loadu_si128((const __m128i *)_range_min_tbl);
-        const __m128i range_max_tbl =
-            _mm_loadu_si128((const __m128i *)_range_max_tbl);
-        const __m128i df_ee_tbl =
-            _mm_loadu_si128((const __m128i *)_df_ee_tbl);
-        const __m128i ef_fe_tbl =
-            _mm_loadu_si128((const __m128i *)_ef_fe_tbl);
+        const __m256i first_len_tbl =
+            _mm256_loadu_si256((const __m256i *)_first_len_tbl);
+        const __m256i first_range_tbl =
+            _mm256_loadu_si256((const __m256i *)_first_range_tbl);
+        const __m256i range_min_tbl =
+            _mm256_loadu_si256((const __m256i *)_range_min_tbl);
+        const __m256i range_max_tbl =
+            _mm256_loadu_si256((const __m256i *)_range_max_tbl);
+        const __m256i df_ee_tbl =
+            _mm256_loadu_si256((const __m256i *)_df_ee_tbl);
+        const __m256i ef_fe_tbl =
+            _mm256_loadu_si256((const __m256i *)_ef_fe_tbl);
 
-        __m128i error = _mm_set1_epi8(0);
+#if !RET_ERR_IDX
+        __m256i error1 = _mm256_set1_epi8(0);
+        __m256i error2 = _mm256_set1_epi8(0);
+#endif
 
-        while (len >= 16) {
-            const __m128i input = _mm_loadu_si128((const __m128i *)data);
+        while (len >= 32) {
+            const __m256i input = _mm256_loadu_si256((const __m256i *)data);
 
             /* high_nibbles = input >> 4 */
-            const __m128i high_nibbles =
-                _mm_and_si128(_mm_srli_epi16(input, 4), _mm_set1_epi8(0x0F));
+            const __m256i high_nibbles =
+                _mm256_and_si256(_mm256_srli_epi16(input, 4), _mm256_set1_epi8(0x0F));
 
             /* first_len = legal character length minus 1 */
             /* 0 for 00~7F, 1 for C0~DF, 2 for E0~EF, 3 for F0~FF */
             /* first_len = first_len_tbl[high_nibbles] */
-            __m128i first_len = _mm_shuffle_epi8(first_len_tbl, high_nibbles);
+            __m256i first_len = _mm256_shuffle_epi8(first_len_tbl, high_nibbles);
 
             /* First Byte: set range index to 8 for bytes within 0xC0 ~ 0xFF */
             /* range = first_range_tbl[high_nibbles] */
-            __m128i range = _mm_shuffle_epi8(first_range_tbl, high_nibbles);
+            __m256i range = _mm256_shuffle_epi8(first_range_tbl, high_nibbles);
 
             /* Second Byte: set range index to first_len */
             /* 0 for 00~7F, 1 for C0~DF, 2 for E0~EF, 3 for F0~FF */
             /* range |= (first_len, prev_first_len) << 1 byte */
-            range = _mm_or_si128(
-                    range, _mm_alignr_epi8(first_len, prev_first_len, 15));
+            range = _mm256_or_si256(
+                    range, push_last_byte_of_a_to_b(prev_first_len, first_len));
 
             /* Third Byte: set range index to saturate_sub(first_len, 1) */
             /* 0 for 00~7F, 0 for C0~DF, 1 for E0~EF, 2 for F0~FF */
-            __m128i tmp;
-            /* tmp = (first_len, prev_first_len) << 2 bytes */
-            tmp = _mm_alignr_epi8(first_len, prev_first_len, 14);
-            /* tmp = saturate_sub(tmp, 1) */
-            tmp = _mm_subs_epu8(tmp, _mm_set1_epi8(1));
-            /* range |= tmp */
-            range = _mm_or_si128(range, tmp);
+            __m256i tmp1, tmp2;
+
+            /* tmp1 = (first_len, prev_first_len) << 2 bytes */
+            tmp1 = push_last_2bytes_of_a_to_b(prev_first_len, first_len);
+            /* tmp2 = saturate_sub(tmp1, 1) */
+            tmp2 = _mm256_subs_epu8(tmp1, _mm256_set1_epi8(1));
+
+            /* range |= tmp2 */
+            range = _mm256_or_si256(range, tmp2);
 
             /* Fourth Byte: set range index to saturate_sub(first_len, 2) */
             /* 0 for 00~7F, 0 for C0~DF, 0 for E0~EF, 1 for F0~FF */
-            /* tmp = (first_len, prev_first_len) << 3 bytes */
-            tmp = _mm_alignr_epi8(first_len, prev_first_len, 13);
-            /* tmp = saturate_sub(tmp, 2) */
-            tmp = _mm_subs_epu8(tmp, _mm_set1_epi8(2));
-            /* range |= tmp */
-            range = _mm_or_si128(range, tmp);
+            /* tmp1 = (first_len, prev_first_len) << 3 bytes */
+            tmp1 = push_last_3bytes_of_a_to_b(prev_first_len, first_len);
+            /* tmp2 = saturate_sub(tmp1, 2) */
+            tmp2 = _mm256_subs_epu8(tmp1, _mm256_set1_epi8(2));
+            /* range |= tmp2 */
+            range = _mm256_or_si256(range, tmp2);
 
             /*
              * Now we have below range indices caluclated
@@ -165,50 +190,46 @@ int utf8_range(const unsigned char *data, int len)
 
             /* Adjust Second Byte range for special First Bytes(E0,ED,F0,F4) */
             /* Overlaps lead to index 9~15, which are illegal in range table */
-            __m128i shift1, pos, range2;
+            __m256i shift1, pos, range2;
             /* shift1 = (input, prev_input) << 1 byte */
-            shift1 = _mm_alignr_epi8(input, prev_input, 15);
-            pos = _mm_sub_epi8(shift1, _mm_set1_epi8(0xEF));
+            shift1 = push_last_byte_of_a_to_b(prev_input, input);
+            pos = _mm256_sub_epi8(shift1, _mm256_set1_epi8(0xEF));
             /*
              * shift1:  | EF  F0 ... FE | FF  00  ... ...  DE | DF  E0 ... EE |
              * pos:     | 0   1      15 | 16  17           239| 240 241    255|
              * pos-240: | 0   0      0  | 0   0            0  | 0   1      15 |
              * pos+112: | 112 113    127|       >= 128        |     >= 128    |
              */
-            tmp = _mm_subs_epu8(pos, _mm_set1_epi8(0xF0));
-            range2 = _mm_shuffle_epi8(df_ee_tbl, tmp);
-            tmp = _mm_adds_epu8(pos, _mm_set1_epi8(0x70));
-            range2 = _mm_add_epi8(range2, _mm_shuffle_epi8(ef_fe_tbl, tmp));
+            tmp1 = _mm256_subs_epu8(pos, _mm256_set1_epi8(240));
+            range2 = _mm256_shuffle_epi8(df_ee_tbl, tmp1);
+            tmp2 = _mm256_adds_epu8(pos, _mm256_set1_epi8(112));
+            range2 = _mm256_add_epi8(range2, _mm256_shuffle_epi8(ef_fe_tbl, tmp2));
 
-            range = _mm_add_epi8(range, range2);
+            range = _mm256_add_epi8(range, range2);
 
             /* Load min and max values per calculated range index */
-            __m128i minv = _mm_shuffle_epi8(range_min_tbl, range);
-            __m128i maxv = _mm_shuffle_epi8(range_max_tbl, range);
+            __m256i minv = _mm256_shuffle_epi8(range_min_tbl, range);
+            __m256i maxv = _mm256_shuffle_epi8(range_max_tbl, range);
 
             /* Check value range */
 #if RET_ERR_IDX
-            error = _mm_cmplt_epi8(input, minv);
-            error = _mm_or_si128(error, _mm_cmpgt_epi8(input, maxv));
+            __m256i error = _mm256_cmpgt_epi8(minv, input);
+            error = _mm256_or_si256(error, _mm256_cmpgt_epi8(input, maxv));
             /* 5% performance drop from this conditional branch */
-            if (!_mm_testz_si128(error, error))
+            if (!_mm256_testz_si256(error, error))
                 break;
 #else
-            /* error |= (input < minv) | (input > maxv) */
-            tmp = _mm_or_si128(
-                      _mm_cmplt_epi8(input, minv),
-                      _mm_cmpgt_epi8(input, maxv)
-                  );
-            error = _mm_or_si128(error, tmp);
+            error1 = _mm256_or_si256(error1, _mm256_cmpgt_epi8(minv, input));
+            error2 = _mm256_or_si256(error2, _mm256_cmpgt_epi8(input, maxv));
 #endif
 
             prev_input = input;
             prev_first_len = first_len;
 
-            data += 16;
-            len -= 16;
+            data += 32;
+            len -= 32;
 #if RET_ERR_IDX
-            err_pos += 16;
+            err_pos += 32;
 #endif
         }
 
@@ -217,12 +238,13 @@ int utf8_range(const unsigned char *data, int len)
         if (err_pos == 1)
             goto do_naive;
 #else
-        if (!_mm_testz_si128(error, error))
+        __m256i error = _mm256_or_si256(error1, error2);
+        if (!_mm256_testz_si256(error, error))
             return -1;
 #endif
 
         /* Find previous token (not 80~BF) */
-        int32_t token4 = _mm_extract_epi32(prev_input, 3);
+        int32_t token4 = _mm256_extract_epi32(prev_input, 7);
         const int8_t *token = (const int8_t *)&token4;
         int lookahead = 0;
         if (token[3] > (int8_t)0xBF)
