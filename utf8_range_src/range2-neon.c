@@ -2,7 +2,8 @@
  * Process 2x16 bytes in each iteration.
  * Comments removed for brevity. See range-neon.c for details.
  */
-#ifdef __aarch64__
+
+#if defined (_M_ARM) || defined(_M_ARM64) || defined(__aarch64__)
 
 #include <stdio.h>
 #include <stdint.h>
@@ -154,4 +155,4 @@ int utf8_range2(const unsigned char *data, int len)
     return utf8_naive(data, len);
 }
 
-#endif
+#endif // defined(__aarch64__) || defined(M_ARM) || defined(M_ARM64)
